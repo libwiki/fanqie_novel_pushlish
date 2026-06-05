@@ -1,0 +1,21 @@
+# 临时文件
+*.tmp
+*.swp
+.DS_Store
+
+# 编辑器配置
+.vscode/
+.idea/
+
+# AI 缓存
+.ai-cache/
+
+# 节点模块
+node_modules/
+
+# CLI 本地状态
+.fanqie.publish.yaml
+fanqie_pub.yaml
+state.json
+playwright-report/
+test-results/

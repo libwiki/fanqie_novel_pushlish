@@ -1,0 +1,23 @@
+{
+  "name": "fanqie-novel-publisher",
+  "version": "0.1.0",
+  "description": "番茄小说 Node.js CLI 全自动发文工具。",
+  "type": "module",
+  "bin": {
+    "fanqie": "./bin/fanqie.js"
+  },
+  "scripts": {
+    "start": "node ./bin/fanqie.js",
+    "check": "node --check ./bin/fanqie.js && find ./src -name '*.js' -print0 | xargs -0 -n1 node --check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "commander": "^14.0.2",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.5",
+    "playwright": "^1.56.1",
+    "yaml": "^2.8.1"
+  }
+}
