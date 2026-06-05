@@ -1,5 +1,7 @@
 # 番茄小说 Node.js 全自动发文 CLI
 
+* 参考自Python项目： https://github.com/hchcx/fanqie_auto_publish
+
 这是一个参考 `hchcx/fanqie_auto_publish` 思路重写的 Node.js CLI 工具。它使用 Playwright 驱动真实浏览器完成番茄作家后台登录、章节管理、新建章节、填写标题正文、处理常见弹窗和确认发布。
 
 ## 安装
