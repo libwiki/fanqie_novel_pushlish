@@ -79,6 +79,9 @@ export function createDefaultProjectConfig({ rootDir, novelName, summary, extens
       ignoreFiles: DEFAULT_IGNORE_FILES,
       ignoreDirs: DEFAULT_IGNORE_DIRS
     },
+    browser: {
+      headless: false
+    },
     updatedAt: nowIso()
   }, rootDir);
 }
@@ -134,6 +137,9 @@ export function normalizeUserProjectConfig(config, rootDir) {
       extensions: normalizeExtensions(config.scan?.extensions || DEFAULT_SCAN_EXTENSIONS),
       ignoreFiles: mergeUnique(DEFAULT_IGNORE_FILES, Array.isArray(config.scan?.ignoreFiles) ? config.scan.ignoreFiles : []),
       ignoreDirs: mergeUnique(DEFAULT_IGNORE_DIRS, Array.isArray(config.scan?.ignoreDirs) ? config.scan.ignoreDirs : [])
+    },
+    browser: {
+      headless: normalizeBoolean(config.browser?.headless)
     },
     updatedAt: config.updatedAt || nowIso()
   };
@@ -191,6 +197,16 @@ export function normalizeExtensions(extensions) {
 
 function mergeUnique(defaultItems, customItems) {
   return [...new Set([...defaultItems, ...customItems])];
+}
+
+function normalizeBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return value.trim().toLowerCase() === 'true';
+  }
+  return Boolean(value);
 }
 
 export function getPubConfigPath(rootDir) {

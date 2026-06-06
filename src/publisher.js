@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { STATE_FILE, BOOK_MANAGE_URL } from './constants.js';
 import { hasStoredLoginState } from './auth.js';
-import { launchVisibleBrowser } from './browser.js';
+import { launchHeadlessBrowser, launchVisibleBrowser } from './browser.js';
 import { cleanSortPrefix, readChapterContent } from './chapter.js';
-import { nowIso, promptEnter } from './io.js';
+import { nowIso, promptChoice, promptEnter } from './io.js';
 import { loadPublishConfig, writeYamlFile } from './config.js';
 
 class OperationCancelledError extends Error {
@@ -66,14 +66,19 @@ export async function publishChapters({ rootDir, config, count, dryRun = false, 
 
   let browser;
   let successCount = 0;
+  const useHeadlessBrowser = Boolean(config.browser?.headless);
   try {
-    browser = await launchVisibleBrowser();
+    if (useHeadlessBrowser) {
+      console.log('已启用无头浏览器模式，交互选择将在控制台完成。');
+    }
+    browser = useHeadlessBrowser ? await launchHeadlessBrowser() : await launchVisibleBrowser();
     const context = await browser.newContext({ storageState: STATE_FILE });
     const page = await context.newPage();
     const session = await createPublishSession({
       page,
       context,
-      novelName: config.novel.name
+      novelName: config.novel.name,
+      useConsoleChoice: useHeadlessBrowser
     });
 
     for (const chapter of candidates) {
@@ -139,7 +144,9 @@ export async function publishChapters({ rootDir, config, count, dryRun = false, 
     }
     await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
     if (browser) {
-      await promptEnter('发布流程结束。检查浏览器无误后，按回车关闭浏览器：').catch(() => {});
+      if (!useHeadlessBrowser) {
+        await promptEnter('发布流程结束。检查浏览器无误后，按回车关闭浏览器：').catch(() => {});
+      }
       await browser.close().catch(() => {});
     }
   }
@@ -239,14 +246,19 @@ export async function saveDrafts({ rootDir, config, count, dryRun = false }) {
 
   let browser;
   let successCount = 0;
+  const useHeadlessBrowser = Boolean(config.browser?.headless);
   try {
-    browser = await launchVisibleBrowser();
+    if (useHeadlessBrowser) {
+      console.log('已启用无头浏览器模式，交互选择将在控制台完成。');
+    }
+    browser = useHeadlessBrowser ? await launchHeadlessBrowser() : await launchVisibleBrowser();
     const context = await browser.newContext({ storageState: STATE_FILE });
     const page = await context.newPage();
     const session = await createPublishSession({
       page,
       context,
-      novelName: config.novel.name
+      novelName: config.novel.name,
+      useConsoleChoice: useHeadlessBrowser
     });
 
     for (const chapter of candidates) {
@@ -313,7 +325,9 @@ export async function saveDrafts({ rootDir, config, count, dryRun = false }) {
     }
     await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
     if (browser) {
-      await promptEnter('存草稿流程结束。检查浏览器无误后，按回车关闭浏览器：').catch(() => {});
+      if (!useHeadlessBrowser) {
+        await promptEnter('存草稿流程结束。检查浏览器无误后，按回车关闭浏览器：').catch(() => {});
+      }
       await browser.close().catch(() => {});
     }
   }
@@ -454,14 +468,14 @@ function findChapterState(publishConfig, chapter) {
   return state;
 }
 
-async function createPublishSession({ page, context, novelName }) {
+async function createPublishSession({ page, context, novelName, useConsoleChoice = false }) {
   console.log(`正在进入番茄后台：${novelName}`);
   await page.goto(BOOK_MANAGE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(3000);
   await assertStillLoggedIn(page);
   await dismissPlatformPopups(page);
 
-  const resolvedNovelName = await openChapterManage(page, novelName);
+  const resolvedNovelName = await openChapterManage(page, novelName, { useConsoleChoice });
   await page.waitForTimeout(4000);
 
   const chapterManagePage = getNewestPage(context, page);
@@ -474,6 +488,7 @@ async function createPublishSession({ page, context, novelName }) {
     page,
     chapterManagePage,
     novelName: resolvedNovelName,
+    useConsoleChoice,
     volumeSelectionDone: false,
     selectedVolume: '',
     previousEditorPage: null
@@ -485,10 +500,10 @@ async function publishOneChapter({ session, chapter, content, targetVolume, stop
   await chapterManagePage.bringToFront().catch(() => {});
   await assertStillLoggedIn(chapterManagePage);
   await dismissPlatformPopups(chapterManagePage);
-  await confirmChapterWarnings(chapterManagePage, chapter, warnings);
+  await confirmChapterWarnings(session, chapter, warnings);
 
   const originalPageCount = context.pages().length;
-  await openChapterEditor(chapterManagePage, chapter);
+  await openChapterEditor(session, chapter);
   await page.waitForTimeout(4000);
   let editorPage = context.pages().length > originalPageCount ? context.pages().at(-1) : getNewestPage(context, chapterManagePage);
 
@@ -514,7 +529,10 @@ async function publishOneChapter({ session, chapter, content, targetVolume, stop
     await closePreviousEditorPage(session, editorPage);
     return;
   }
-  await submitChapter(editorPage, { stopBeforeConfirm });
+  await submitChapter(editorPage, {
+    stopBeforeConfirm,
+    useConsoleChoice: session.useConsoleChoice
+  });
   await restoreChapterManagePage({
     chapterManagePage,
     editorPage,
@@ -614,12 +632,19 @@ async function showBrowserChoiceDialog(page, { title, message, options }) {
   }), { title, message, options });
 }
 
-async function confirmChapterWarnings(page, chapter, warnings) {
+async function chooseInteraction(session, choiceConfig) {
+  if (session.useConsoleChoice) {
+    return promptChoice(choiceConfig);
+  }
+  return showBrowserChoiceDialog(session.chapterManagePage || session.page, choiceConfig);
+}
+
+async function confirmChapterWarnings(session, chapter, warnings) {
   if (!warnings.length) {
     return;
   }
 
-  const choice = await showBrowserChoiceDialog(page, {
+  const choice = await chooseInteraction(session, {
     title: '章节信息可能错乱',
     message: [
       `当前章节：第${chapter.chapterNumber || chapter.index}章 ${chapter.title || ''}`,
@@ -648,7 +673,7 @@ async function confirmChapterWarnings(page, chapter, warnings) {
   }
 }
 
-async function openChapterManage(page, novelName) {
+async function openChapterManage(page, novelName, { useConsoleChoice = false } = {}) {
   if (await clickChapterManageForNovel(page, novelName)) {
     return novelName;
   }
@@ -658,12 +683,12 @@ async function openChapterManage(page, novelName) {
     throw new OperationCancelledError(`未找到小说《${novelName}》，且无法提取候选作品列表。`);
   }
 
-  const selected = await showBrowserChoiceDialog(page, {
+  const choiceConfig = {
     title: '未找到配置中的小说',
     message: `当前配置小说名：${novelName}\n请选择本次要操作的作品，或取消本次任务。`,
     options: [
-      ...candidates.map((candidate, index) => ({
-        label: `${index + 1}. ${candidate}`,
+      ...candidates.map((candidate) => ({
+        label: candidate,
         value: candidate
       })),
       {
@@ -672,7 +697,10 @@ async function openChapterManage(page, novelName) {
         kind: 'danger'
       }
     ]
-  });
+  };
+  const selected = useConsoleChoice
+    ? await promptChoice(choiceConfig)
+    : await showBrowserChoiceDialog(page, choiceConfig);
 
   if (selected === '__cancel__') {
     throw new OperationCancelledError('用户取消选择作品。');
@@ -906,14 +934,15 @@ async function selectChapterManageMenu(page, preferredMenu) {
   }
 }
 
-async function openChapterEditor(page, chapter) {
+async function openChapterEditor(session, chapter) {
+  const page = session.chapterManagePage;
   const chapterNumber = chapter.chapterNumber || String(chapter.index);
   const draftRow = page.locator('tr, li, .chapter-item').filter({
     hasText: new RegExp(`第\\s*${escapeRegExp(chapterNumber)}\\s*章`)
   }).first();
 
   if (await draftRow.isVisible()) {
-    const choice = await showBrowserChoiceDialog(page, {
+    const choice = await chooseInteraction(session, {
       title: '检测到重复章节',
       message: `后台已存在“第${chapterNumber}章”相关记录。\n当前文件：${chapter.file}\n请选择如何处理。`,
       options: [
@@ -1008,7 +1037,7 @@ async function dismissPlatformPopups(page) {
   return dismissed;
 }
 
-async function selectVolume(page, targetVolume) {
+async function selectVolume(page, targetVolume, { useConsoleChoice = false } = {}) {
   const dialogOpened = await openVolumeDialog(page);
   if (!dialogOpened) {
     throw new Error('未能打开分卷选择弹窗');
@@ -1019,6 +1048,40 @@ async function selectVolume(page, targetVolume) {
     if (await chooseVolumeInOpenDialog(page, volumeName)) {
       return volumeName;
     }
+  }
+
+  if (useConsoleChoice) {
+    const availableVolumes = await collectOpenDialogVolumeChoices(page);
+    if (availableVolumes.length === 0) {
+      await closeVolumeDialogIfOpen(page);
+      throw new OperationCancelledError(`分卷弹窗中未找到 ${targetVolume}，且无法提取可选分卷列表。`);
+    }
+
+    const selectedVolume = await promptChoice({
+      title: '未找到目标分卷',
+      message: `本地章节目标分卷：${targetVolume}\n请选择本次要使用的后台分卷，或取消本次任务。`,
+      options: [
+        ...availableVolumes.map((volumeName) => ({
+          label: volumeName,
+          value: volumeName
+        })),
+        {
+          label: '取消本次任务',
+          value: '__cancel__',
+          kind: 'danger'
+        }
+      ]
+    });
+
+    if (selectedVolume === '__cancel__') {
+      await closeVolumeDialogIfOpen(page);
+      throw new OperationCancelledError('用户取消选择分卷。');
+    }
+    if (!(await chooseVolumeInOpenDialog(page, selectedVolume))) {
+      await closeVolumeDialogIfOpen(page);
+      throw new OperationCancelledError(`未能选择分卷：${selectedVolume}`);
+    }
+    return selectedVolume;
   }
 
   console.log(`分卷弹窗中未找到包含 ${targetVolume} 的选项，请在浏览器中手动选择目标卷并确定。等待 20 秒...`);
@@ -1081,6 +1144,54 @@ async function chooseVolumeInOpenDialog(page, volumeName) {
   return false;
 }
 
+async function collectOpenDialogVolumeChoices(page) {
+  const volumes = await page.evaluate(() => {
+    const result = [];
+    const seen = new Set();
+    const selectors = [
+      '[role="dialog"] *',
+      '.ant-modal *',
+      '.semi-modal *',
+      '.byte-modal *',
+      'body *'
+    ];
+
+    function cleanText(value) {
+      return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function looksLikeVolumeName(text) {
+      if (text.length < 2 || text.length > 24) {
+        return false;
+      }
+      if (/新建分卷|取消|确定|确认|请输入|卷名/.test(text)) {
+        return false;
+      }
+      return /第[一二三四五六七八九十百0-9]+卷|卷\s*[0-9一二三四五六七八九十百]+/.test(text);
+    }
+
+    for (const selector of selectors) {
+      for (const node of document.querySelectorAll(selector)) {
+        const rect = node.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0 || rect.top < 0 || rect.top > window.innerHeight) {
+          continue;
+        }
+        const text = cleanText(node.textContent);
+        if (!looksLikeVolumeName(text) || seen.has(text)) {
+          continue;
+        }
+        seen.add(text);
+        result.push(text);
+        if (result.length >= 20) {
+          return result;
+        }
+      }
+    }
+    return result;
+  }).catch(() => []);
+  return volumes;
+}
+
 async function ensureSessionVolume({ session, page, targetVolume }) {
   const normalizedTargetVolume = normalizeVolumeName(targetVolume);
   if (!normalizedTargetVolume || normalizedTargetVolume === '第1卷') {
@@ -1090,7 +1201,9 @@ async function ensureSessionVolume({ session, page, targetVolume }) {
   }
 
   if (!session.volumeSelectionDone) {
-    const selectedVolume = await selectVolume(page, normalizedTargetVolume);
+    const selectedVolume = await selectVolume(page, normalizedTargetVolume, {
+      useConsoleChoice: session.useConsoleChoice
+    });
     session.volumeSelectionDone = true;
     session.selectedVolume = selectedVolume;
     console.log(`本次命令将复用分卷：${selectedVolume}`);
@@ -1293,7 +1406,7 @@ async function isEditorTextReady(page, expectedContent) {
   }, expectedContent).catch(() => false);
 }
 
-async function submitChapter(page, { stopBeforeConfirm = false } = {}) {
+async function submitChapter(page, { stopBeforeConfirm = false, useConsoleChoice = false } = {}) {
   const nextButton = page.getByText('下一步', { exact: true }).last();
   if (!(await nextButton.isVisible())) {
     const saveButton = page.getByText('存草稿', { exact: false }).first();
@@ -1340,10 +1453,16 @@ async function submitChapter(page, { stopBeforeConfirm = false } = {}) {
   }
 
   if (stopBeforeConfirm) {
+    if (useConsoleChoice) {
+      throw new Error('无头浏览器模式无法停在最终“确认发布”面板供手动检查。');
+    }
     await promptEnter('未自动匹配到“确认发布”，浏览器已暂停。请手动检查并取消后，按回车继续：');
     return;
   }
 
+  if (useConsoleChoice) {
+    throw new Error('未自动匹配到最后的“确认发布”，无头浏览器模式下无法手动确认。');
+  }
   await promptEnter('未自动匹配到最后的“确认发布”。请在浏览器中手动确认发布完成后，按回车继续：');
 }
 
