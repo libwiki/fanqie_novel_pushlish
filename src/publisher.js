@@ -1497,6 +1497,7 @@ async function submitChapter(page, { stopBeforeConfirm = false, useConsoleChoice
 
   await nextButton.click({ force: true });
   await page.waitForTimeout(2000);
+  await clickFullDetectionIfVisible(page);
 
   for (let attempt = 0; attempt < 18; attempt += 1) {
     await clickAiNoIfVisible(page);
@@ -1587,11 +1588,11 @@ async function clickAiNoIfVisible(page) {
 }
 
 async function handlePublishPopup(page) {
-  for (const text of ['提交', '继续发布', '我知道了', '确认', '确定']) {
-    const roleButton = page.getByRole('button', { name: text }).last();
+  for (const text of ['提交', '继续发布', '我知道了', '确认', '确定', '全面检测']) {
+    const roleButton = await findPublishPopupButton(page, text);
     if (await roleButton.isVisible().catch(() => false) && await roleButton.isEnabled().catch(() => false)) {
       await roleButton.click({ force: true });
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(text === '全面检测' ? 4000 : 1000);
       return true;
     }
 
@@ -1603,6 +1604,39 @@ async function handlePublishPopup(page) {
     }
   }
   return false;
+}
+
+async function clickFullDetectionIfVisible(page) {
+  const detectionModal = page.getByText('请选择内容检测方式', { exact: false }).first();
+  if (!(await detectionModal.waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false))) {
+    return false;
+  }
+
+  const fullDetectionButton = await findPublishPopupButton(page, '全面检测');
+  if (!(await fullDetectionButton.isVisible().catch(() => false))) {
+    return false;
+  }
+
+  console.log('检测到内容检测方式弹窗，自动选择“全面检测”。');
+  await fullDetectionButton.click({ force: true });
+  await page.waitForTimeout(2500);
+  return true;
+}
+
+async function findPublishPopupButton(page, text) {
+  if (text === '全面检测') {
+    const cssButton = page.locator('button:has-text("全面检测")').first();
+    if (await cssButton.isVisible().catch(() => false)) {
+      return cssButton;
+    }
+    const roleButton = page.getByRole('button', { name: text }).last();
+    if (await roleButton.isVisible().catch(() => false)) {
+      return roleButton;
+    }
+    return page.getByText(text, { exact: true }).last();
+  }
+
+  return page.getByRole('button', { name: text }).last();
 }
 
 function getNewestPage(context, fallbackPage) {
