@@ -28,15 +28,13 @@ export async function publishChapters({ rootDir, config, count, dryRun = false, 
   const { publishPath, publishConfig } = await loadPublishConfig(rootDir);
   syncPublishConfigHeader(publishConfig, config);
   syncPublishChapters(publishConfig, config.chapters.items);
+  syncPublishProgress(publishConfig, config.chapters.items);
 
   const publishCount = Number(count || config.publish.defaultCount || 3);
   const candidates = limitToFirstVolume(selectPendingChapters(publishConfig, config.chapters.items, { force }), publishCount);
   const warningsByFile = buildChapterWarnings(candidates);
 
-  await writeYamlFile(publishPath, {
-    ...publishConfig,
-    updatedAt: nowIso()
-  });
+  await writePublishConfig(publishPath, publishConfig, config.chapters.items);
 
   if (candidates.length === 0) {
     console.log('没有待发布章节。若修改过稿件，请先执行 `fanqie scan` 更新章节 sha1。');
@@ -56,16 +54,10 @@ export async function publishChapters({ rootDir, config, count, dryRun = false, 
   const runId = `run-${Date.now()}`;
   publishConfig.publish.lastRunId = runId;
   publishConfig.publish.startedAt = publishConfig.publish.startedAt || nowIso();
-  publishConfig.publish.runs.push({
-    id: runId,
-    startedAt: nowIso(),
-    count: candidates.length,
-    status: 'running'
-  });
-  await writeYamlFile(publishPath, publishConfig);
+  publishConfig.publish.updatedAt = nowIso();
+  await writePublishConfig(publishPath, publishConfig, config.chapters.items);
 
   let browser;
-  let successCount = 0;
   const useHeadlessBrowser = Boolean(config.browser?.headless);
   try {
     if (useHeadlessBrowser) {
@@ -88,7 +80,7 @@ export async function publishChapters({ rootDir, config, count, dryRun = false, 
       state.attempts = Number(state.attempts || 0) + 1;
       state.startedAt = nowIso();
       state.error = '';
-      await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+      await writePublishConfig(publishPath, publishConfig, config.chapters.items);
 
       try {
         const absFilePath = path.resolve(rootDir, chapter.file);
@@ -105,7 +97,7 @@ export async function publishChapters({ rootDir, config, count, dryRun = false, 
         state.status = 'published';
         state.publishedAt = nowIso();
         state.error = '';
-        successCount += 1;
+        removeMissingChapterNumber(publishConfig, chapter);
         console.log(`发布成功：第${chapter.chapterNumber || chapter.index}章 ${chapter.title}`);
       } catch (error) {
         if (error instanceof ChapterSkippedError) {
@@ -113,14 +105,14 @@ export async function publishChapters({ rootDir, config, count, dryRun = false, 
           state.skippedAt = nowIso();
           state.error = error.message;
           console.log(`已跳过：${chapter.file}`);
-          await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+          await writePublishConfig(publishPath, publishConfig, config.chapters.items);
           continue;
         }
         if (error instanceof OperationCancelledError) {
           state.status = 'cancelled';
           state.error = error.message;
           console.log(`用户取消，本次发布中断：${error.message}`);
-          await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+          await writePublishConfig(publishPath, publishConfig, config.chapters.items);
           break;
         }
         state.status = 'failed';
@@ -128,21 +120,16 @@ export async function publishChapters({ rootDir, config, count, dryRun = false, 
         state.failedAt = nowIso();
         console.log(`发布失败：${chapter.file}`);
         console.log(error.message);
-        await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+        await writePublishConfig(publishPath, publishConfig, config.chapters.items);
         break;
       }
 
-      await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+      await writePublishConfig(publishPath, publishConfig, config.chapters.items);
     }
     await selectChapterManageMenu(session.chapterManagePage, 'chapters').catch(() => {});
   } finally {
-    const run = publishConfig.publish.runs.find((item) => item.id === runId);
-    if (run) {
-      run.finishedAt = nowIso();
-      run.successCount = successCount;
-      run.status = successCount === candidates.length ? 'finished' : 'interrupted';
-    }
-    await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+    publishConfig.publish.updatedAt = nowIso();
+    await writePublishConfig(publishPath, publishConfig, config.chapters.items);
     if (browser) {
       if (!useHeadlessBrowser) {
         await promptEnter('发布流程结束。检查浏览器无误后，按回车关闭浏览器：').catch(() => {});
@@ -160,7 +147,8 @@ export async function testPublishFlow({ rootDir, config }) {
   const { publishConfig } = await loadPublishConfig(rootDir);
   syncPublishConfigHeader(publishConfig, config);
   syncPublishChapters(publishConfig, config.chapters.items);
-  const candidates = selectPendingChapters(publishConfig, config.chapters.items, 1);
+  syncPublishProgress(publishConfig, config.chapters.items);
+  const candidates = limitToFirstVolume(selectPendingChapters(publishConfig, config.chapters.items), 1);
 
   if (candidates.length === 0) {
     console.log('没有可测试的待发布章节。请先执行 `fanqie scan`，或修改稿件后再测试。');
@@ -207,15 +195,13 @@ export async function saveDrafts({ rootDir, config, count, dryRun = false }) {
   const { publishPath, publishConfig } = await loadPublishConfig(rootDir);
   syncPublishConfigHeader(publishConfig, config);
   syncPublishChapters(publishConfig, config.chapters.items);
+  syncPublishProgress(publishConfig, config.chapters.items);
 
   const saveCount = Number(count || config.publish.defaultCount || 3);
   const candidates = limitToFirstVolume(selectDraftCandidates(publishConfig, config.chapters.items), saveCount);
   const warningsByFile = buildChapterWarnings(candidates);
 
-  await writeYamlFile(publishPath, {
-    ...publishConfig,
-    updatedAt: nowIso()
-  });
+  await writePublishConfig(publishPath, publishConfig, config.chapters.items);
 
   if (candidates.length === 0) {
     console.log('没有待保存草稿的章节。若修改过稿件，请先执行 `fanqie scan` 更新章节 sha1。');
@@ -235,17 +221,10 @@ export async function saveDrafts({ rootDir, config, count, dryRun = false }) {
   const runId = `save-${Date.now()}`;
   publishConfig.publish.lastRunId = runId;
   publishConfig.publish.startedAt = publishConfig.publish.startedAt || nowIso();
-  publishConfig.publish.runs.push({
-    id: runId,
-    type: 'save',
-    startedAt: nowIso(),
-    count: candidates.length,
-    status: 'running'
-  });
-  await writeYamlFile(publishPath, publishConfig);
+  publishConfig.publish.updatedAt = nowIso();
+  await writePublishConfig(publishPath, publishConfig, config.chapters.items);
 
   let browser;
-  let successCount = 0;
   const useHeadlessBrowser = Boolean(config.browser?.headless);
   try {
     if (useHeadlessBrowser) {
@@ -268,7 +247,7 @@ export async function saveDrafts({ rootDir, config, count, dryRun = false }) {
       state.attempts = Number(state.attempts || 0) + 1;
       state.startedAt = nowIso();
       state.error = '';
-      await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+      await writePublishConfig(publishPath, publishConfig, config.chapters.items);
 
       try {
         const absFilePath = path.resolve(rootDir, chapter.file);
@@ -286,7 +265,6 @@ export async function saveDrafts({ rootDir, config, count, dryRun = false }) {
         state.status = 'drafted';
         state.draftedAt = nowIso();
         state.error = '';
-        successCount += 1;
         console.log(`草稿已保存：第${chapter.chapterNumber || chapter.index}章 ${chapter.title}`);
       } catch (error) {
         if (error instanceof ChapterSkippedError) {
@@ -294,14 +272,14 @@ export async function saveDrafts({ rootDir, config, count, dryRun = false }) {
           state.skippedAt = nowIso();
           state.error = error.message;
           console.log(`已跳过：${chapter.file}`);
-          await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+          await writePublishConfig(publishPath, publishConfig, config.chapters.items);
           continue;
         }
         if (error instanceof OperationCancelledError) {
           state.status = 'cancelled';
           state.error = error.message;
           console.log(`用户取消，本次保存草稿中断：${error.message}`);
-          await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+          await writePublishConfig(publishPath, publishConfig, config.chapters.items);
           break;
         }
         state.status = 'failed';
@@ -309,21 +287,16 @@ export async function saveDrafts({ rootDir, config, count, dryRun = false }) {
         state.failedAt = nowIso();
         console.log(`保存草稿失败：${chapter.file}`);
         console.log(error.message);
-        await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+        await writePublishConfig(publishPath, publishConfig, config.chapters.items);
         break;
       }
 
-      await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+      await writePublishConfig(publishPath, publishConfig, config.chapters.items);
     }
     await selectChapterManageMenu(session.chapterManagePage, 'drafts').catch(() => {});
   } finally {
-    const run = publishConfig.publish.runs.find((item) => item.id === runId);
-    if (run) {
-      run.finishedAt = nowIso();
-      run.successCount = successCount;
-      run.status = successCount === candidates.length ? 'finished' : 'interrupted';
-    }
-    await writeYamlFile(publishPath, { ...publishConfig, updatedAt: nowIso() });
+    publishConfig.publish.updatedAt = nowIso();
+    await writePublishConfig(publishPath, publishConfig, config.chapters.items);
     if (browser) {
       if (!useHeadlessBrowser) {
         await promptEnter('存草稿流程结束。检查浏览器无误后，按回车关闭浏览器：').catch(() => {});
@@ -364,12 +337,97 @@ function syncPublishChapters(publishConfig, chapters) {
   publishConfig.chapters.count = publishConfig.chapters.items.length;
 }
 
+async function writePublishConfig(publishPath, publishConfig, chapters) {
+  syncPublishProgress(publishConfig, chapters);
+  const updatedAt = nowIso();
+  publishConfig.updatedAt = updatedAt;
+  publishConfig.publish.updatedAt = updatedAt;
+  await writeYamlFile(publishPath, publishConfig);
+}
+
+function syncPublishProgress(publishConfig, chapters) {
+  publishConfig.publish.progress = normalizePublishProgress(publishConfig.publish.progress);
+
+  const progress = publishConfig.publish.progress;
+  const previousCurrentNumber = progress.currentChapterNumber;
+  const uploadedNumbers = new Set();
+  const knownNumbers = new Set();
+  const changedPublishedNumbers = new Set();
+
+  for (const chapter of chapters) {
+    const chapterNumber = getChapterProgressNumber(chapter);
+    if (!Number.isInteger(chapterNumber)) {
+      continue;
+    }
+
+    knownNumbers.add(chapterNumber);
+    const state = findChapterState(publishConfig, chapter);
+    if (state.status === 'published' && state.sha1 === chapter.sha1) {
+      uploadedNumbers.add(chapterNumber);
+    }
+    if (chapterNumber <= previousCurrentNumber && state.previousSha1 && state.sha1 !== state.previousSha1) {
+      changedPublishedNumbers.add(chapterNumber);
+    }
+  }
+
+  const maxUploadedNumber = Math.max(0, ...uploadedNumbers);
+  progress.currentChapterNumber = Math.max(progress.currentChapterNumber, maxUploadedNumber);
+
+  const inferredMissingNumbers = [];
+  for (let number = previousCurrentNumber + 1; number <= progress.currentChapterNumber; number += 1) {
+    if (knownNumbers.has(number) && !uploadedNumbers.has(number)) {
+      inferredMissingNumbers.push(number);
+    }
+  }
+
+  progress.missingChapterNumbers = normalizePositiveIntegerList([
+    ...progress.missingChapterNumbers
+      .filter((number) => number <= progress.currentChapterNumber)
+      .filter((number) => !uploadedNumbers.has(number)),
+    ...changedPublishedNumbers,
+    ...inferredMissingNumbers
+  ]);
+  progress.updatedAt = nowIso();
+  return progress;
+}
+
+function normalizePublishProgress(progress = {}) {
+  return {
+    currentChapterNumber: normalizeNonNegativeInteger(progress.currentChapterNumber),
+    missingChapterNumbers: normalizePositiveIntegerList(progress.missingChapterNumbers),
+    updatedAt: progress.updatedAt || ''
+  };
+}
+
+function removeMissingChapterNumber(publishConfig, chapter) {
+  const chapterNumber = getChapterProgressNumber(chapter);
+  if (!Number.isInteger(chapterNumber)) {
+    return;
+  }
+
+  publishConfig.publish.progress = normalizePublishProgress(publishConfig.publish.progress);
+  publishConfig.publish.progress.missingChapterNumbers = publishConfig.publish.progress.missingChapterNumbers
+    .filter((number) => number !== chapterNumber);
+}
+
 function selectPendingChapters(publishConfig, chapters, { force = false } = {}) {
+  const progress = syncPublishProgress(publishConfig, chapters);
+  const missingChapterNumbers = new Set(progress.missingChapterNumbers);
+
   return chapters
     .filter((chapter) => {
       const state = findChapterState(publishConfig, chapter);
       if (force) {
         return true;
+      }
+      const chapterNumber = getChapterProgressNumber(chapter);
+      if (Number.isInteger(chapterNumber)) {
+        if (missingChapterNumbers.has(chapterNumber)) {
+          return true;
+        }
+        if (chapterNumber <= progress.currentChapterNumber) {
+          return false;
+        }
       }
       return !(state.status === 'published' && state.sha1 === chapter.sha1);
     });
@@ -404,6 +462,26 @@ function limitToFirstVolume(chapters, count) {
 
 function normalizeVolumeName(value) {
   return cleanSortPrefix(String(value || '').trim());
+}
+
+function getChapterProgressNumber(chapter) {
+  const number = Number.parseInt(chapter.chapterNumber || chapter.index, 10);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function normalizePositiveIntegerList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return [...new Set(values
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isInteger(value) && value > 0))]
+    .sort((left, right) => left - right);
+}
+
+function normalizeNonNegativeInteger(value) {
+  const number = Number.parseInt(value, 10);
+  return Number.isInteger(number) && number > 0 ? number : 0;
 }
 
 function buildChapterWarnings(chapters) {

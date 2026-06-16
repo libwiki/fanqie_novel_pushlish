@@ -75,7 +75,7 @@ scan:
 
 如果扫描目录中存在 `.gitignore`，`fanqie scan` 会同时遵守 `.gitignore` 中的忽略规则。
 
-`fanqie.yaml` 只记录用户可编辑的小说名、摘要和扫描规则。`fanqie_pub.yaml` 由 CLI 自动维护，记录当前默认分卷、默认发布数量、章节数量、章节名、章节号、所属分卷、文件路径、文件大小、sha1 和发布状态。
+`fanqie.yaml` 只记录用户可编辑的小说名、摘要和扫描规则。`fanqie_pub.yaml` 由 CLI 自动维护，记录当前默认分卷、默认发布数量、已上传到的最高章节号、缺失章节号、章节数量、章节名、章节号、所属分卷、文件路径、文件大小、sha1 和发布状态。
 
 `fanqie.yaml` 还可以配置 `push` 和 `save` 是否使用无头浏览器，默认关闭：
 
@@ -109,9 +109,16 @@ fanqie push --force --count 1
 ```yaml
 publish:
   defaultCount: 3
+  progress:
+    currentChapterNumber: 7
+    missingChapterNumbers:
+      - 4
+      - 5
 ```
 
-发布状态也写入 `fanqie_pub.yaml`，用于断点续传。已发布且 sha1 未变化的章节会被跳过；如果源文件内容变化，下一次会重新进入待发布队列。
+发布状态也写入 `fanqie_pub.yaml`，用于断点续传。`currentChapterNumber` 表示当前已确认上传到的最高章节号，`missingChapterNumbers` 表示这个范围内需要补发的章节。比如已上传 1、2、3、6、7 章时，当前章节号会记录为 7，缺失章节会记录为 `[4, 5]`；下一次 `fanqie push` 会先处理 4、5，再从 8 章继续。
+
+已发布且 sha1 未变化的章节会被跳过；如果源文件内容变化，下一次会重新进入待发布队列。若平台提交异常没有被 CLI 识别出来，可以手动把对应章节号加入 `missingChapterNumbers`，下一次发布会优先补发这些章节。
 
 如果线上章节出现异常，例如字数为 0，但本地已经记录为 `published`，可以使用 `fanqie push --force` 把已发布章节也纳入队列。进入后台检测到重复章节号时，会弹框让你选择覆盖、跳过或取消。
 

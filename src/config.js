@@ -92,7 +92,7 @@ export function createDefaultPubConfig({ currentVolume } = {}) {
     currentVolume: currentVolume || '第1卷',
     publish: {
       defaultCount: DEFAULT_PUBLISH_COUNT,
-      runs: []
+      progress: createEmptyPublishProgress()
     },
     chapters: {
       count: 0,
@@ -161,9 +161,7 @@ export function normalizePubConfig(config = {}) {
       lastRunId: config.publish?.lastRunId || legacyPublishConfig.lastRunId || '',
       startedAt: config.publish?.startedAt || legacyPublishConfig.startedAt || '',
       updatedAt: config.publish?.updatedAt || '',
-      runs: Array.isArray(config.publish?.runs)
-        ? config.publish.runs
-        : (Array.isArray(legacyPublishConfig.runs) ? legacyPublishConfig.runs : [])
+      progress: normalizePublishProgress(config.publish?.progress || legacyPublishConfig.progress)
     },
     chapters: {
       count: Number(config.chapters?.count || chapterItems.length || 0),
@@ -237,7 +235,7 @@ function extractLegacyPubConfig(config = {}) {
     currentVolume: config.currentVolume || '第1卷',
     publish: config.publish || {
       defaultCount: DEFAULT_PUBLISH_COUNT,
-      runs: []
+      progress: createEmptyPublishProgress()
     },
     chapters: config.chapters || {
       count: 0,
@@ -245,4 +243,35 @@ function extractLegacyPubConfig(config = {}) {
     },
     updatedAt: config.updatedAt || nowIso()
   };
+}
+
+function normalizePublishProgress(progress = {}) {
+  return {
+    currentChapterNumber: normalizeNonNegativeInteger(progress.currentChapterNumber),
+    missingChapterNumbers: normalizePositiveIntegerList(progress.missingChapterNumbers),
+    updatedAt: progress.updatedAt || ''
+  };
+}
+
+function createEmptyPublishProgress() {
+  return {
+    currentChapterNumber: 0,
+    missingChapterNumbers: [],
+    updatedAt: ''
+  };
+}
+
+function normalizePositiveIntegerList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return [...new Set(values
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isInteger(value) && value > 0))]
+    .sort((left, right) => left - right);
+}
+
+function normalizeNonNegativeInteger(value) {
+  const number = Number.parseInt(value, 10);
+  return Number.isInteger(number) && number > 0 ? number : 0;
 }
